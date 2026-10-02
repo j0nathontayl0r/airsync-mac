@@ -1670,20 +1670,24 @@ class AppState: ObservableObject {
 
     /// One-off upgrade from 4.1.0, which cached the wallpaper in UserDefaults. Writes it to
     /// `Wallpapers/last_wallpaper.jpg` if that file is missing, then removes the key, so later
-    /// launches cost one lookup.
+    /// launches cost one lookup. If the write fails the key is kept so the next launch retries.
     private func migrateLegacyWallpaperCache() {
         let key = "lastCachedWallpaperBase64"
         guard let stored = UserDefaults.standard.object(forKey: key) else { return }
-        defer { UserDefaults.standard.removeObject(forKey: key) }
         guard let base64 = stored as? String,
-              let data = Data(base64Encoded: base64, options: .ignoreUnknownCharacters), !data.isEmpty,
-              let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return }
+              let data = Data(base64Encoded: base64, options: .ignoreUnknownCharacters), !data.isEmpty else {
+            UserDefaults.standard.removeObject(forKey: key) // unusable value
+            return
+        }
+        guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return }
         let wallpaperDir = appSupport.appendingPathComponent("Wallpapers")
         let fileURL = wallpaperDir.appendingPathComponent("last_wallpaper.jpg")
-        guard !FileManager.default.fileExists(atPath: fileURL.path) else { return }
         do {
-            try FileManager.default.createDirectory(at: wallpaperDir, withIntermediateDirectories: true)
-            try data.write(to: fileURL, options: .atomic)
+            if !FileManager.default.fileExists(atPath: fileURL.path) {
+                try FileManager.default.createDirectory(at: wallpaperDir, withIntermediateDirectories: true)
+                try data.write(to: fileURL, options: .atomic)
+            }
+            UserDefaults.standard.removeObject(forKey: key)
         } catch {
             print("[state] Failed to migrate cached wallpaper: \(error)")
         }

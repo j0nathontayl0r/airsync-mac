@@ -41,7 +41,7 @@ func appIconsDirectory() -> URL {
 /// Returns true if it wrote. Throws only on write failure; a missing or unreadable file
 /// counts as "different" and is written.
 @discardableResult
-func writeIfChanged(_ data: Data, to url: URL) throws -> Bool {
+nonisolated func writeIfChanged(_ data: Data, to url: URL) throws -> Bool {
     if FileManager.default.contents(atPath: url.path) == data { return false }
     try data.write(to: url, options: .atomic)
     return true
