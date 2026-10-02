@@ -124,12 +124,11 @@ extension WebSocketServer {
 
             if let base64 = dict["wallpaper"] as? String {
                 AppState.shared.currentDeviceWallpaperBase64 = base64
-                UserDefaults.standard.set(base64, forKey: "lastCachedWallpaperBase64")
-                
-                // Save wallpaper to disk for DeviceCard
-                if let id = dict["id"] as? String,
-                   let data = Data(base64Encoded: base64, options: .ignoreUnknownCharacters) {
-                    DispatchQueue.global(qos: .background).async {
+
+                // Save wallpaper to disk for DeviceCard and the BLE fallback
+                if let id = dict["id"] as? String {
+                    syncQueue.async {
+                        guard let data = Data(base64Encoded: base64, options: .ignoreUnknownCharacters) else { return }
                         do {
                             let fileManager = FileManager.default
                             if let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
@@ -139,8 +138,8 @@ extension WebSocketServer {
                                 }
                                 let fileURL = wallpaperDir.appendingPathComponent("\(id).jpg")
                                 let fallbackURL = wallpaperDir.appendingPathComponent("last_wallpaper.jpg")
-                                try data.write(to: fileURL)
-                                try? data.write(to: fallbackURL)
+                                try writeIfChanged(data, to: fileURL)
+                                try writeIfChanged(data, to: fallbackURL)
                                 print("[websocket] Saved wallpaper for device \(id)")
                             }
                         } catch {
