@@ -65,7 +65,6 @@ struct airsync_macApp: App {
         }
 
         loadCachedIcons()
-        loadCachedWallpapers()
 
 
 

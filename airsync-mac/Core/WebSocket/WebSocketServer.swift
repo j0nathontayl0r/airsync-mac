@@ -38,6 +38,9 @@ class WebSocketServer: ObservableObject {
     internal let networkCheckInterval: TimeInterval = 10.0
     internal let lock = NSRecursiveLock()
     internal let fileQueue = DispatchQueue(label: "com.airsync.fileio")
+    /// Serial queue for phone-sync persistence (app icons, wallpapers). Work enqueued here from
+    /// the main thread runs in arrival order. Never call `.sync` on it from the main thread.
+    internal let syncQueue = DispatchQueue(label: "com.airsync.sync", qos: .utility)
     private let jsonDecoder = JSONDecoder()
     
     internal var servers: [String: HttpServer] = [:]
