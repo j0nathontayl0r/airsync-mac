@@ -211,6 +211,7 @@ struct NotificationsSettingsView: View {
                 L(bulkTargetState ? "settings.notifications.apps.enableAll" : "settings.notifications.apps.disableAll"),
                 role: bulkTargetState ? nil : .destructive
             ) {
+                guard appState.device?.isRegularConnection == true else { return }
                 WebSocketServer.shared.setNotificationsEnabled(bulkTargetState, for: bulkChangingApps.map(\.packageName))
             }
             Button(L("quickshare.cancel"), role: .cancel) { }
