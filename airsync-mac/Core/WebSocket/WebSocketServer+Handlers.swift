@@ -124,12 +124,11 @@ extension WebSocketServer {
 
             if let base64 = dict["wallpaper"] as? String {
                 AppState.shared.currentDeviceWallpaperBase64 = base64
-                UserDefaults.standard.set(base64, forKey: "lastCachedWallpaperBase64")
-                
-                // Save wallpaper to disk for DeviceCard
-                if let id = dict["id"] as? String,
-                   let data = Data(base64Encoded: base64, options: .ignoreUnknownCharacters) {
-                    DispatchQueue.global(qos: .background).async {
+
+                // Save wallpaper to disk for DeviceCard and the BLE fallback
+                if let id = dict["id"] as? String {
+                    syncQueue.async {
+                        guard let data = Data(base64Encoded: base64, options: .ignoreUnknownCharacters), !data.isEmpty else { return }
                         do {
                             let fileManager = FileManager.default
                             if let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
@@ -139,9 +138,11 @@ extension WebSocketServer {
                                 }
                                 let fileURL = wallpaperDir.appendingPathComponent("\(id).jpg")
                                 let fallbackURL = wallpaperDir.appendingPathComponent("last_wallpaper.jpg")
-                                try data.write(to: fileURL)
-                                try? data.write(to: fallbackURL)
-                                print("[websocket] Saved wallpaper for device \(id)")
+                                let wrote = try writeIfChanged(data, to: fileURL)
+                                let wroteFallback = try writeIfChanged(data, to: fallbackURL)
+                                if wrote || wroteFallback {
+                                    print("[websocket] Saved wallpaper for device \(id)")
+                                }
                             }
                         } catch {
                             print("[websocket] Failed to save wallpaper: \(error)")
@@ -425,9 +426,12 @@ extension WebSocketServer {
 
     private func handleAppIcons(_ message: Message) {
         if let dict = message.data.value as? [String: [String: Any]] {
-            DispatchQueue.global(qos: .background).async {
+            // Background block touches only the payload and the file system; the single
+            // main block below merges into the live list, so back-to-back messages apply in order.
+            syncQueue.async {
                 let incomingPackages = Set(dict.keys)
-                let existingPackages = Set(AppState.shared.androidApps.keys)
+                let dir = appIconsDirectory()
+                var prepared: [String: (name: String, systemApp: Bool, listening: Bool, iconPath: String?)] = [:]
 
                 for (package, details) in dict {
                     guard let name = details["name"] as? String,
@@ -440,55 +444,57 @@ extension WebSocketServer {
 
                     var iconPath: String? = nil
                     if let data = Data(base64Encoded: cleaned), !cleaned.isEmpty {
-                        let fileURL = appIconsDirectory().appendingPathComponent("\(package).png")
+                        let fileURL = dir.appendingPathComponent("\(package).png")
                         do {
-                            try data.write(to: fileURL, options: .atomic)
+                            try writeIfChanged(data, to: fileURL)
                             iconPath = fileURL.path
                         } catch {
                             print("[websocket] Failed to write icon for \(package): \(error)")
                         }
                     }
 
-                    DispatchQueue.main.async {
-                        if var existingApp = AppState.shared.androidApps[package] {
-                            existingApp.listening = listening
-                            if let newIconPath = iconPath {
-                                existingApp.iconUrl = newIconPath
-                            }
-                            AppState.shared.androidApps[package] = existingApp
-                        } else {
-                            let app = AndroidApp(
-                                packageName: package,
-                                name: name,
-                                iconUrl: iconPath,
-                                listening: listening,
-                                systemApp: systemApp
-                            )
-                            AppState.shared.androidApps[package] = app
-                        }
-                    }
+                    prepared[package] = (name: name, systemApp: systemApp, listening: listening, iconPath: iconPath)
                 }
 
-                let toRemove = existingPackages.subtracting(incomingPackages)
-                if !toRemove.isEmpty {
-                    DispatchQueue.main.async {
-                        var pathsToRemove: [String] = []
-                        for pkg in toRemove {
-                            if let iconPath = AppState.shared.androidApps[pkg]?.iconUrl {
-                                pathsToRemove.append(iconPath)
+                DispatchQueue.main.async {
+                    var apps = AppState.shared.androidApps
+                    for (package, entry) in prepared {
+                        if var existingApp = apps[package] {
+                            existingApp.listening = entry.listening
+                            if let newIconPath = entry.iconPath {
+                                existingApp.iconUrl = newIconPath
                             }
-                            AppState.shared.androidApps.removeValue(forKey: pkg)
+                            apps[package] = existingApp
+                        } else {
+                            apps[package] = AndroidApp(
+                                packageName: package,
+                                name: entry.name,
+                                iconUrl: entry.iconPath,
+                                listening: entry.listening,
+                                systemApp: entry.systemApp
+                            )
                         }
-                        DispatchQueue.global(qos: .background).async {
+                    }
+
+                    // Removal uses every incoming key, including skipped entries, so a known app
+                    // with a malformed entry is kept.
+                    var pathsToRemove: [String] = []
+                    for pkg in Set(apps.keys).subtracting(incomingPackages) {
+                        if let iconPath = apps.removeValue(forKey: pkg)?.iconUrl {
+                            pathsToRemove.append(iconPath)
+                        }
+                    }
+
+                    AppState.shared.androidApps = apps
+                    AppState.shared.saveAppsToDisk()
+
+                    if !pathsToRemove.isEmpty {
+                        self.syncQueue.async {
                             for path in pathsToRemove {
                                 try? FileManager.default.removeItem(atPath: path)
                             }
                         }
                     }
-                }
-
-                DispatchQueue.main.async {
-                    AppState.shared.saveAppsToDisk()
                 }
             }
         }

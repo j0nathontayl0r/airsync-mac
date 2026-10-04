@@ -211,6 +211,7 @@ class AppState: ObservableObject {
             self.menubarNotificationStyle = "count"
         }
 
+        migrateLegacyWallpaperCache()
         loadAppsFromDisk()
         loadPinnedApps()
         loadNotificationLaunchPreferences()
@@ -378,7 +379,6 @@ class AppState: ObservableObject {
         }
     }
 
-    @Published var deviceWallpapers: [String: String] = [:] // key = deviceName-ip, value = file path
     @Published var isClipboardSyncEnabled: Bool {
         didSet {
             UserDefaults.standard.set(isClipboardSyncEnabled, forKey: "isClipboardSyncEnabled")
@@ -1582,21 +1582,6 @@ class AppState: ObservableObject {
         return url
     }
 
-    func wallpaperCacheDirectory() -> URL {
-        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("wallpapers", isDirectory: true)
-        if !FileManager.default.fileExists(atPath: dir.path) {
-            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        }
-        return dir
-    }
-
-    var currentWallpaperPath: String? {
-        guard let device = myDevice else { return nil }
-        let key = "\(device.name)-\(device.ipAddress)"
-        return deviceWallpapers[key]
-    }
-
     private func saveLicenseDetailsToUserDefaults() {
         guard let details = licenseDetails else {
             UserDefaults.standard.removeObject(forKey: AppState.licenseDetailsKey)
@@ -1682,6 +1667,31 @@ class AppState: ObservableObject {
     }
 
     // MARK: - App Storage
+
+    /// One-off upgrade from 4.1.0, which cached the wallpaper in UserDefaults. Writes it to
+    /// `Wallpapers/last_wallpaper.jpg` if that file is missing, then removes the key, so later
+    /// launches cost one lookup. If the write fails the key is kept so the next launch retries.
+    private func migrateLegacyWallpaperCache() {
+        let key = "lastCachedWallpaperBase64"
+        guard let stored = UserDefaults.standard.object(forKey: key) else { return }
+        guard let base64 = stored as? String,
+              let data = Data(base64Encoded: base64, options: .ignoreUnknownCharacters), !data.isEmpty else {
+            UserDefaults.standard.removeObject(forKey: key) // unusable value
+            return
+        }
+        guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return }
+        let wallpaperDir = appSupport.appendingPathComponent("Wallpapers")
+        let fileURL = wallpaperDir.appendingPathComponent("last_wallpaper.jpg")
+        do {
+            if !FileManager.default.fileExists(atPath: fileURL.path) {
+                try FileManager.default.createDirectory(at: wallpaperDir, withIntermediateDirectories: true)
+                try data.write(to: fileURL, options: .atomic)
+            }
+            UserDefaults.standard.removeObject(forKey: key)
+        } catch {
+            print("[state] Failed to migrate cached wallpaper: \(error)")
+        }
+    }
 
     func loadAppsFromDisk() {
         let url = appIconsDirectory().appendingPathComponent("apps.json")
@@ -1886,21 +1896,16 @@ class AppState: ObservableObject {
         
         // Reuse cached wallpaper for BLE connection
         if self.currentDeviceWallpaperBase64 == nil {
-            if let cachedBase64 = UserDefaults.standard.string(forKey: "lastCachedWallpaperBase64"), !cachedBase64.isEmpty {
-                self.currentDeviceWallpaperBase64 = cachedBase64
-                print("[state] (BLE) Loaded last cached wallpaper from UserDefaults for BLE connection")
-            } else {
-                let fileManager = FileManager.default
-                if let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
-                    let wallpaperDir = appSupport.appendingPathComponent("Wallpapers")
-                    let devId = BLECentralManager.shared.connectingDeviceUUID ?? ""
-                    let fileURL = wallpaperDir.appendingPathComponent("\(devId).jpg")
-                    let fallbackURL = wallpaperDir.appendingPathComponent("last_wallpaper.jpg")
-                    let targetURL = fileManager.fileExists(atPath: fileURL.path) ? fileURL : (fileManager.fileExists(atPath: fallbackURL.path) ? fallbackURL : nil)
-                    if let targetURL = targetURL, let data = try? Data(contentsOf: targetURL) {
-                        self.currentDeviceWallpaperBase64 = data.base64EncodedString()
-                        print("[state] (BLE) Loaded last cached wallpaper from disk for BLE connection")
-                    }
+            let fileManager = FileManager.default
+            if let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+                let wallpaperDir = appSupport.appendingPathComponent("Wallpapers")
+                let devId = BLECentralManager.shared.connectingDeviceUUID ?? ""
+                let fileURL = wallpaperDir.appendingPathComponent("\(devId).jpg")
+                let fallbackURL = wallpaperDir.appendingPathComponent("last_wallpaper.jpg")
+                let targetURL = fileManager.fileExists(atPath: fileURL.path) ? fileURL : (fileManager.fileExists(atPath: fallbackURL.path) ? fallbackURL : nil)
+                if let targetURL = targetURL, let data = try? Data(contentsOf: targetURL) {
+                    self.currentDeviceWallpaperBase64 = data.base64EncodedString()
+                    print("[state] (BLE) Loaded last cached wallpaper from disk for BLE connection")
                 }
             }
         }
