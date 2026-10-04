@@ -162,12 +162,23 @@ extension WebSocketServer {
     }
 
     func toggleNotification(for package: String, to state: Bool) {
-        guard var app = AppState.shared.androidApps[package] else { return }
-        app.listening = state
-        AppState.shared.androidApps[package] = app
+        setNotificationsEnabled(state, for: [package])
+    }
+
+    /// Sets `listening` for each known package, assigns `androidApps` once, saves once,
+    /// then sends one `toggleAppNotif` per package. Unknown packages are skipped.
+    /// Does not filter unchanged apps. Call on the main thread.
+    func setNotificationsEnabled(_ enabled: Bool, for packages: [String]) {
+        var apps = AppState.shared.androidApps
+        let known = packages.filter { apps[$0] != nil }
+        guard !known.isEmpty else { return }
+        for package in known { apps[package]?.listening = enabled }
+        AppState.shared.androidApps = apps
         AppState.shared.saveAppsToDisk()
 
-        sendMessage(type: "toggleAppNotif", data: ["package": package, "state": "\(state)"])
+        for package in known {
+            sendMessage(type: "toggleAppNotif", data: ["package": package, "state": "\(enabled)"])
+        }
     }
 
     func sendBrowseRequest(path: String, showHidden: Bool = false) {

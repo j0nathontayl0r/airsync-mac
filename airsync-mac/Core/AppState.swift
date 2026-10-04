@@ -42,6 +42,7 @@ class AppState: ObservableObject {
     private var shouldSkipSave = false
     private var cancellables = Set<AnyCancellable>()
     private var bleWakeUpWorkItem: DispatchWorkItem?
+    private let appsSaveQueue = DispatchQueue(label: "com.airsync.appsSave", qos: .background)
     private static let licenseDetailsKey = "licenseDetails"
 
     @Published var isOS26: Bool = true
@@ -1626,10 +1627,10 @@ class AppState: ObservableObject {
     func saveAppsToDisk() {
         let appsValues = Array(self.androidApps.values)
         let url = appIconsDirectory().appendingPathComponent("apps.json")
-        DispatchQueue.global(qos: .background).async {
+        appsSaveQueue.async {
             do {
                 let data = try JSONEncoder().encode(appsValues)
-                try data.write(to: url)
+                try data.write(to: url, options: .atomic)
             } catch {
                 print("[state] (apps) Error saving apps: \(error)")
             }

@@ -17,6 +17,13 @@ struct NotificationsSettingsView: View {
     @State private var notificationsGranted = false
     @State private var notificationsChecked = false
     @State private var selectedSettingsApp: AndroidApp? = nil
+    @State private var showBulkConfirm = false
+    @State private var bulkTargetState = false
+
+    // Apps the pending bulk action would change; shared by the dialog title and its action.
+    private var bulkChangingApps: [AndroidApp] {
+        appState.androidApps.values.filter { $0.listening != bulkTargetState }
+    }
 
     var body: some View {
         ScrollView {
@@ -118,6 +125,22 @@ struct NotificationsSettingsView: View {
                                 .foregroundColor(.secondary)
                                 .padding(.vertical, 8)
                         } else {
+                            let bulkUnavailable = appState.device?.isRegularConnection != true
+                            HStack {
+                                Spacer()
+                                Button(L("settings.notifications.apps.enableAll")) {
+                                    bulkTargetState = true
+                                    showBulkConfirm = true
+                                }
+                                .disabled(bulkUnavailable || sortedApps.allSatisfy { $0.listening })
+                                Button(L("settings.notifications.apps.disableAll")) {
+                                    bulkTargetState = false
+                                    showBulkConfirm = true
+                                }
+                                .disabled(bulkUnavailable || sortedApps.allSatisfy { !$0.listening })
+                            }
+                            Divider()
+
                             ForEach(sortedApps, id: \.packageName) { app in
                                 HStack {
                                     if let iconPath = app.iconUrl,
@@ -175,6 +198,23 @@ struct NotificationsSettingsView: View {
         }
         .sheet(item: $selectedSettingsApp) { app in
             AppNotificationSettingsView(app: app)
+        }
+        .confirmationDialog(
+            String(
+                format: L(bulkTargetState ? "settings.notifications.apps.enableAll.confirm" : "settings.notifications.apps.disableAll.confirm"),
+                bulkChangingApps.count
+            ),
+            isPresented: $showBulkConfirm,
+            titleVisibility: .visible
+        ) {
+            Button(
+                L(bulkTargetState ? "settings.notifications.apps.enableAll" : "settings.notifications.apps.disableAll"),
+                role: bulkTargetState ? nil : .destructive
+            ) {
+                guard appState.device?.isRegularConnection == true else { return }
+                WebSocketServer.shared.setNotificationsEnabled(bulkTargetState, for: bulkChangingApps.map(\.packageName))
+            }
+            Button(L("quickshare.cancel"), role: .cancel) { }
         }
     }
 
